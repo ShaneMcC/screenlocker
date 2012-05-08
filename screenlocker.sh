@@ -246,7 +246,7 @@ lockSession() {
 		echo "Display ${DISPLAY}.. " >> ${LOGFILE} 2>&1
 		# This should lock everything...
 		su -l "${USER}" --shell="/bin/bash" -c "qdbus org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${LOGFILE} 2>&1
-		echo "Unlocked" >> ${LOGFILE} 2>&1
+		echo "Locked" >> ${LOGFILE} 2>&1
 	done;
 	echo "Done" >> ${LOGFILE} 2>&1
 }
