@@ -37,6 +37,11 @@ while getopts hvsfk:l: OPT; do
 			;;
 		k)
 			FILENAME="$OPTARG"
+			DIR=`dirname ${FILENAME}`
+			if [ ! -e "${HOME}/${DIR}" ]; then
+				echo "ERROR: Filename is relative to current home directory, not an absolute path." >&2
+				exit 1;
+			fi;
 			;;
 		l)
 			LOGFILE="$OPTARG"
@@ -52,7 +57,7 @@ shift `expr $OPTIND - 1`
 findDevices() {
 	DEVICES=()
 	while read ID; do
-		VALID=`lsusb -v -d ${ID} 2>/dev/null | grep "Mass Storage"`
+		VALID=`lsusb -v -d ${ID} 2>/dev/null | egrep "(Mass Storage|Yubikey)"`
 		if [ "${VALID}" != "" ]; then
 			DEVICES+=(${ID})
 		fi;
@@ -90,11 +95,15 @@ choseDevice() {
 	for D in ${DEVICES}; do
 		getDeviceLocation LOCATIONS ${D}
 		for BUS in "${LOCATIONS[@]}"; do
-			SERIAL=`cat /sys/bus/usb/devices/${BUS}/serial`
-			NAME=`cat /sys/bus/usb/devices/${BUS}/product`
+			SERIAL=`cat /sys/bus/usb/devices/${BUS}/serial 2>/dev/null`
+			NAME=`cat /sys/bus/usb/devices/${BUS}/product 2>/dev/null`
 
 			LISTED=0
+			ISBLOCK=0
+			COMPATIBLE=0
+			# Check block devices.
 			while read BLOCK; do
+				ISBLOCK=1
 				DEV=`ls ${BLOCK} | head -n 1`
 				while read PART; do
 					if [ ${LISTED} = '0' ]; then
@@ -103,25 +112,50 @@ choseDevice() {
 					fi;
 					LISTED=1
 
-					echo "    ${COUNT}: /dev/${PART}"
+					printf "    %3d: /dev/%s\n" "${COUNT}" "${PART}"
+					COMPATIBLE=1
 					DEVS["${COUNT},DEV"]="${DEV}"
 					DEVS["${COUNT},BUS"]="${BUS}"
 					COUNT=$((${COUNT} + 1))
 				done < <(ls -1 ${BLOCK}/${DEV}/ | grep ^${DEV})
 			done < <(find /sys/bus/usb/devices/${BUS}/ -name block)
+
+			# Check non-block devices, eg hardware tokens (yubikey)
+			if [ "${ISBLOCK}" != "1" ]; then
+				if [ "${SERIAL}" != "" ]; then
+					echo ""
+					echo "  ${NAME}: ${SERIAL} (${BUS})"
+					LISTED=1
+					printf "    %3d: %s\n" "${COUNT}" "${NAME}"
+					DEVS["${COUNT},DEV"]=""
+					DEVS["${COUNT},BUS"]="${BUS}"
+					COUNT=$((${COUNT} + 1))
+					COMPATIBLE=1
+				else
+					echo ""
+					echo "  ${NAME}: ${SERIAL} (${BUS})"
+					printf "         %s\n" "This device is not compatible (no serial number found)"
+				fi;
+			fi;
 		done
 	done;
 
 	echo ""
-	echo -n "Please pick a block device number to use: "
+
+	if [ "${COMPATIBLE}" != "1" ]; then
+		echo "Error: No valid devices found." >&2
+		exit 1;
+	fi;
+
+	echo -n "Please pick a device number to use: "
 	read number
 
 	echo ""
 	DEV=${DEVS["${number},DEV"]}
 	BUS=${DEVS["${number},BUS"]}
 
-	if [ "${DEV}" = "" ]; then
-		echo "No (valid) device selected." >&2
+	if [ "${BUS}" = "" ]; then
+		echo "Error: No (valid) device selected." >&2
 		exit 1;
 	fi;
 
@@ -137,7 +171,11 @@ setupDevice() {
 	DEV="${5}"
 
 	echo ""
-	echo "Setting up with /dev/${DEV}..."
+	if [ "" = "${DEV}" ]; then
+		echo "Setting up with device in BUS ${BUS}..."
+	else
+		echo "Setting up with /dev/${DEV}..."
+	fi;
 	getDeviceKey KEY VENDOR PRODUCT SERIAL "${BUS}" "${DEV}"
 
 	echo ${KEY} > "${HOME}/${FILENAME}"
@@ -151,12 +189,12 @@ getDeviceKey() {
 	DEV="${6}"
 	METHOD="${7}"
 
-	SERIAL=`cat /sys/bus/usb/devices/${BUS}/serial`
-	NAME=`cat /sys/bus/usb/devices/${BUS}/product`
-	VENDOR=`cat /sys/bus/usb/devices/${BUS}/idVendor`
-	PRODUCT=`cat /sys/bus/usb/devices/${BUS}/idProduct`
+	SERIAL=`cat /sys/bus/usb/devices/${BUS}/serial 2>/dev/null`
+	NAME=`cat /sys/bus/usb/devices/${BUS}/product 2>/dev/null`
+	VENDOR=`cat /sys/bus/usb/devices/${BUS}/idVendor 2>/dev/null`
+	PRODUCT=`cat /sys/bus/usb/devices/${BUS}/idProduct 2>/dev/null`
 
-	makeKey KEY "${SERIAL}" "${NAME//[ ]/_}" "${VENDOR}" "${PRODUCT}"
+	makeKey KEY "${SERIAL}" "${NAME//[ ]/_}" "${VENDOR}" "${PRODUCT}" "${BUS}" "${DEV}" "${METHOD}"
 	eval ${1}=\"${KEY}\";
 	eval ${2}=\"${VENDOR}\";
 	eval ${3}=\"${PRODUCT}\";
@@ -168,6 +206,9 @@ makeKey() {
 	NAME="${3}"
 	VENDOR="${4}"
 	PRODUCT="${5}"
+	BUS="${6}"
+	DEV="${7}"
+	METHOD="${8}"
 
 	# Meh.
 	if [ "${METHOD}" = "1" -o "${METHOD}" = "" ]; then
@@ -192,7 +233,7 @@ loadKey() {
 	if [ "${KEYFILE}" = "" ]; then
 		KEYFILE="${HOME}/${FILENAME}"
 	fi;
-	KEY=`cat "${KEYFILE}"`
+	KEY=`cat "${KEYFILE}" 2>/dev/null`
 	eval ${1}=\"${KEY}\";
 }
 
@@ -270,6 +311,8 @@ if [ "${SETUPMODE}" = "1" ]; then
 			FLAGS+=(-k "${FILENAME}")
 		fi;
 
+		# udevinfo () { udevadm info -a -p `udevadm info -q path -n "$1"`; }
+		# udevinfo /dev/sdj1
 		echo "echo 'SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"${VENDOR}\" ATTRS{idProduct}==\"${PRODUCT}\", ATTRS{serial}==\"${SERIAL}\", RUN+=\"${DIR}/`basename ${0}`${FLAGS[@]}\"' >> /etc/udev/rules.d/80-usbdisk.rules"
 		echo "chmod a+x /etc/udev/rules.d/80-usbdisk.rules"
 		echo "restart udev"
