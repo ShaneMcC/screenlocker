@@ -263,11 +263,14 @@ unlockSession() {
 	for S in ${SESSIONS}; do
 		export DISPLAY="${S}"
 		echo "Display ${DISPLAY}.. " >> ${LOGFILE} 2>&1
-		# KDE
-		su -l "${USER}" --shell="/bin/bash" -c "killall kscreenlocker" >> ${LOGFILE} 2>&1
 
-		# Gnome
-
+		QDBUS=`which qdbus`
+		DBUSSEND=`which dbus-send`
+		if [ "" != "${QDBUS}" ]; then
+			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver SetActive false" >> ${LOGFILE} 2>&1
+		elif [ "" != "${DBUSSEND}" ]; then
+			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.SetActive boolean:false" >> ${LOGFILE} 2>&1
+		fi;
 
 		echo "Unlocked" >> ${LOGFILE} 2>&1l
 	done;
@@ -285,8 +288,16 @@ lockSession() {
 	for S in ${SESSIONS}; do
 		export DISPLAY="${S}"
 		echo "Display ${DISPLAY}.. " >> ${LOGFILE} 2>&1
+
 		# This should lock everything...
-		su -l "${USER}" --shell="/bin/bash" -c "qdbus org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${LOGFILE} 2>&1
+		QDBUS=`which qdbus`
+		DBUSSEND=`which dbus-send`
+		if [ "" != "${QDBUS}" ]; then
+			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${LOGFILE} 2>&1
+		elif [ "" != "${DBUSSEND}" ]; then
+			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.Lock" >> ${LOGFILE} 2>&1
+		fi;
+
 		echo "Locked" >> ${LOGFILE} 2>&1
 	done;
 	echo "Done" >> ${LOGFILE} 2>&1
