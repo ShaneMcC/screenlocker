@@ -92,6 +92,7 @@ choseDevice() {
 	COUNT=0
 	declare -A DEVS
 
+	COMPATIBLE=0
 	for D in ${DEVICES}; do
 		getDeviceLocation LOCATIONS ${D}
 		for BUS in "${LOCATIONS[@]}"; do
@@ -100,7 +101,6 @@ choseDevice() {
 
 			LISTED=0
 			ISBLOCK=0
-			COMPATIBLE=0
 			# Check block devices.
 			while read BLOCK; do
 				ISBLOCK=1
