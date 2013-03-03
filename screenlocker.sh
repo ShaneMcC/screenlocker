@@ -272,6 +272,13 @@ unlockSession() {
 			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.SetActive boolean:false" >> ${LOGFILE} 2>&1
 		fi;
 
+		# KDE 4.10 Broke this... https://bugs.kde.org/show_bug.cgi?id=314989
+		if [ "" != "${QDBUS}" ]; then
+			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} | grep kscreenlocker | sed 's/org.kde.//' | xargs kquitapp" >> ${LOGFILE} 2>&1
+		elif [ "" != "${DBUSSEND}" ]; then
+			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --print-reply --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep kscreenlocker | awk -F\\\" '{print \$2}' | sed 's/org.kde.//' | xargs kquitapp" >> ${LOGFILE} 2>&1
+		fi;
+
 		echo "Unlocked" >> ${LOGFILE} 2>&1l
 	done;
 	echo "Done" >> ${LOGFILE} 2>&1
