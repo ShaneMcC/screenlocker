@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Make sure we are actually using bash not sh or dash
+if [ "$_" != "/bin/bash" ]; then
+	/bin/bash $0 "${@}"
+	exit $?
+fi;
+
 # Filename to store unlock key in.
 FILENAME=".usbkeyid"
 
