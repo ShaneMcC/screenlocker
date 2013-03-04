@@ -17,8 +17,12 @@ LOGFILE="/dev/null"
 SETUPMODE=0
 # Force setup even if already done
 FORCESETUP=0
+# Alternative UDEV
+ALTUDEV=0
+# Alternative UDEV
+ALLDEVICES=0
 
-while getopts hvsfk:l: OPT; do
+while getopts huvsafk:l: OPT; do
 	case "$OPT" in
 		h)
 			echo "USB (Un)lock v0.1"
@@ -27,6 +31,8 @@ while getopts hvsfk:l: OPT; do
 			echo " -v                   Show version information"
 			echo " -s                   Run setup process if not already completed"
 			echo " -f                   Force setup to run again even if already completed (requires -s)"
+			echo " -a                   When creating udev rules, use alternative syntax (If the standard rule does work. try this)"
+			echo " -u                   Show all possible usb devices, not just specific 'known-good' subsets. [EXPERIMENTAL]"
 			echo " -k <keyfilename>     Specify an alternative key file to use"
 			echo " -l <logfilename>     Specify a log file name"
 			exit 0
@@ -40,6 +46,12 @@ while getopts hvsfk:l: OPT; do
 			;;
 		f)
 			FORCESETUP=1
+			;;
+		a)
+			ALTUDEV=1
+			;;
+		u)
+			ALLDEVICES=1
 			;;
 		k)
 			FILENAME="$OPTARG"
@@ -63,7 +75,11 @@ shift `expr $OPTIND - 1`
 findDevices() {
 	DEVICES=()
 	while read ID; do
-		VALID=`lsusb -v -d ${ID} 2>/dev/null | egrep "(Mass Storage|Yubikey)"`
+		if [ "${ALLDEVICES}" = "1" ]; then
+			VALID=`lsusb -v -d ${ID} 2>/dev/null`
+		else
+			VALID=`lsusb -v -d ${ID} 2>/dev/null | egrep "(Mass Storage|Yubikey|Phone)"`
+		fi;
 		if [ "${VALID}" != "" ]; then
 			DEVICES+=(${ID})
 		fi;
@@ -124,7 +140,7 @@ choseDevice() {
 					DEVS["${COUNT},BUS"]="${BUS}"
 					COUNT=$((${COUNT} + 1))
 				done < <(ls -1 ${BLOCK}/${DEV}/ | grep ^${DEV})
-			done < <(find /sys/bus/usb/devices/${BUS}/ -name block)
+			done < <(find /sys/bus/usb/devices/${BUS}/ -name block 2>/dev/null)
 
 			# Check non-block devices, eg hardware tokens (yubikey)
 			if [ "${ISBLOCK}" != "1" ]; then
@@ -322,7 +338,7 @@ if [ "${SETUPMODE}" = "1" ]; then
 		echo "Setup has completed."
 
 		echo ""
-		echo "To make this work, please run the following as root:"
+		echo "To make this work, please run the following:"
 		echo ""
 
 		DIR="$( cd -P "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -337,9 +353,15 @@ if [ "${SETUPMODE}" = "1" ]; then
 
 		# udevinfo () { udevadm info -a -p `udevadm info -q path -n "$1"`; }
 		# udevinfo /dev/sdj1
-		echo "echo 'SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"${VENDOR}\" ATTRS{idProduct}==\"${PRODUCT}\", ATTRS{serial}==\"${SERIAL}\", RUN+=\"${DIR}/`basename ${0}`${FLAGS[@]}\"' >> /etc/udev/rules.d/80-usbdisk.rules"
-		echo "chmod a+x /etc/udev/rules.d/80-usbdisk.rules"
-		echo "restart udev"
+		if [ "${ALTUDEV}" == "1" ]; then
+			echo -n "echo 'SUBSYSTEMS==\"usb\", ENV{ID_VENDOR_ID}==\"${VENDOR}\" ENV{ID_MODEL_ID}==\"${PRODUCT}\", ENV{ID_SERIAL_SHORT}==\"${SERIAL}\""
+		else
+			echo -n "echo 'SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"${VENDOR}\" ATTRS{idProduct}==\"${PRODUCT}\", ATTRS{serial}==\"${SERIAL}\""
+		fi;
+		echo -n ", RUN+=\"${DIR}/`basename ${0}`${FLAGS[@]}\"' | sudo tee -a /etc/udev/rules.d/80-usbdisk.rules";
+
+		echo -n "; sudo chmod a+x /etc/udev/rules.d/80-usbdisk.rules"
+		echo "; sudo restart udev"
 	else
 		echo "Setup has already been completed."
 	fi;
