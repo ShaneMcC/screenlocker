@@ -19,10 +19,12 @@ SETUPMODE=0
 FORCESETUP=0
 # Alternative UDEV
 ALTUDEV=0
-# Alternative UDEV
+# Show all devices
 ALLDEVICES=0
+# Hide incompatible devices when showing all devices.
+HIDEINCOMPATIBLE=1
 
-while getopts huvsafk:l: OPT; do
+while getopts huvsafik:l: OPT; do
 	case "$OPT" in
 		h)
 			echo "USB (Un)lock v0.1"
@@ -32,7 +34,8 @@ while getopts huvsafk:l: OPT; do
 			echo " -s                   Run setup process if not already completed"
 			echo " -f                   Force setup to run again even if already completed (requires -s)"
 			echo " -a                   When creating udev rules, use alternative syntax (If the standard rule does work. try this)"
-			echo " -u                   Show all possible usb devices, not just specific 'known-good' subsets. [EXPERIMENTAL]"
+			echo " -u                   Show all possible usb devices, not just specific 'known-good' subsets."
+			echo " -i                   When using -u, show 'incompatible' devices (no serial number) rather than hiding them."
 			echo " -k <keyfilename>     Specify an alternative key file to use"
 			echo " -l <logfilename>     Specify a log file name"
 			exit 0
@@ -52,6 +55,9 @@ while getopts huvsafk:l: OPT; do
 			;;
 		u)
 			ALLDEVICES=1
+			;;
+		i)
+			HIDEINCOMPATIBLE=0
 			;;
 		k)
 			FILENAME="$OPTARG"
@@ -78,7 +84,7 @@ findDevices() {
 		if [ "${ALLDEVICES}" = "1" ]; then
 			VALID=`lsusb -v -d ${ID} 2>/dev/null`
 		else
-			VALID=`lsusb -v -d ${ID} 2>/dev/null | egrep "(Mass Storage|Yubikey|Phone)"`
+			VALID=`lsusb -v -d ${ID} 2>/dev/null | egrep "(Mass Storage|Yubikey|Phone|Nexus)"`
 		fi;
 		if [ "${VALID}" != "" ]; then
 			DEVICES+=(${ID})
@@ -153,7 +159,7 @@ choseDevice() {
 					DEVS["${COUNT},BUS"]="${BUS}"
 					COUNT=$((${COUNT} + 1))
 					COMPATIBLE=1
-				else
+				elif [ "${HIDEINCOMPATIBLE}" = "0" ]; then
 					echo ""
 					echo "  ${NAME}: ${SERIAL} (${BUS})"
 					printf "         %s\n" "This device is not compatible (no serial number found)"
