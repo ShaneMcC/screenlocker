@@ -386,7 +386,7 @@ getSessions() {
 # second param is the display id (eg :0) to look for.
 getDBUS() {
 	SESSION="${2}"
-	DBUS=$(who -u -p | grep "(${SESSION})" | awk '{print $6}' | while read P; do cat /proc/${P}/environ | tr '\0' '\n' | grep -a DBUS_SESSION_BUS_ADDRESS; done | cut -d "=" -f 2- | sort -u)
+	DBUS=$(who -u -p | grep "(${SESSION})" | awk '{print $(NF-1)}' | while read P; do cat /proc/${P}/environ | tr '\0' '\n' | grep -a DBUS_SESSION_BUS_ADDRESS; done | cut -d "=" -f 2- | sort -u)
 	eval ${1}=\"${DBUS}\";
 }
 
@@ -398,7 +398,6 @@ unlockSession() {
 	USER="${1}"
 
 	QDBUS=`which qdbus`
-	QDBUS=""
 	DBUSSEND=`which dbus-send`
 
 	echo "---------------" >> ${SCREENLOCKER_LOGFILE} 2>&1
@@ -446,7 +445,6 @@ lockSession() {
 	USER="${1}"
 
 	QDBUS=`which qdbus`
-	QDBUS=""
 	DBUSSEND=`which dbus-send`
 
 	getSessions SESSIONS ${USER}
@@ -501,9 +499,9 @@ if [ "${BASH_SOURCE}" = "${0}" ]; then
 			# udevinfo () { udevadm info -a -p `udevadm info -q path -n "$1"`; }
 			# udevinfo /dev/sdj1
 			if [ "${ALTUDEV}" = "1" ]; then
-				echo -n "echo 'SUBSYSTEMS==\"usb\", ENV{ID_VENDOR_ID}==\"${VENDOR}\" ENV{ID_MODEL_ID}==\"${PRODUCT}\", ENV{ID_SERIAL_SHORT}==\"${SERIAL}\""
-			else
 				echo -n "echo 'SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"${VENDOR}\" ATTRS{idProduct}==\"${PRODUCT}\", ATTRS{serial}==\"${SERIAL}\""
+			else
+				echo -n "echo 'SUBSYSTEMS==\"usb\", ENV{ID_VENDOR_ID}==\"${VENDOR}\" ENV{ID_MODEL_ID}==\"${PRODUCT}\", ENV{ID_SERIAL_SHORT}==\"${SERIAL}\""
 			fi;
 			echo -n ", RUN+=\"${DIR}/`basename ${0}`${FLAGS[@]}\"' | sudo tee -a /etc/udev/rules.d/80-usbdisk.rules";
 
