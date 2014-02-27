@@ -1,83 +1,115 @@
 #!/bin/bash
 
-# Make sure we are actually using bash not sh or dash
-if [ "$_" != "/bin/bash" ]; then
-	/bin/bash $0 "${@}"
-	exit $?
+# File to log stuff to for debugging if required, if not already specified
+if [ "${SCREENLOCKER_LOGFILE}" = "" ]; then
+	SCREENLOCKER_LOGFILE="/dev/null"
 fi;
 
-# Filename to store unlock key in.
-FILENAME=".usbkeyid"
+if [ "$_" != "/bin/bash" -a "${BASH_VERSION}" = "" ]; then
+	# Not bash.
+	SCREENLOCKER_ISBASH="0"
 
-# File to log stuff to for debugging if required.
-LOGFILE="/dev/null"
+	# Make a possibly useful attempt to set BASH_SOURCE.
+	# This seems to work for ksh or dash.
+	if [ "${_}" = "]" -o "${0}" = "ksh" ]; then
+		BASH_SOURCE="SOURCED"
+	elif [ "${ZSH_VERSION}" != "" ]; then
+		# Assume sourced, so that we just error out.
+		BASH_SOURCE="ZSH"
+	else
+		BASH_SOURCE="${0}"
+	fi;
+else
+	SCREENLOCKER_ISBASH="1"
+fi;
 
-# Flags from below.
-# Do Setup
-SETUPMODE=0
-# Force setup even if already done
-FORCESETUP=0
-# Alternative UDEV
-ALTUDEV=0
-# Show all devices
-ALLDEVICES=0
-# Hide incompatible devices when showing all devices.
-HIDEINCOMPATIBLE=1
+# Check if we are actually being "sourced" or ran properly.
+# If "sourced" then we just return some functions, and don't actually do
+# anything.
+if [ "${BASH_SOURCE}" = "${0}" ]; then
+	# Make sure we are actually using bash not sh or dash
+	if [ "${SCREENLOCKER_ISBASH}" != "1" ]; then
+		/bin/bash $0 "${@}"
+		exit $?
+	fi;
 
-while getopts huvsafik:l: OPT; do
-	case "$OPT" in
-		h)
-			echo "USB (Un)lock v0.1"
-			echo "Usage: `basename $0` [-hvsf] [-k keyfilename] [-l logfilename]"
-			echo " -h                   This help notification"
-			echo " -v                   Show version information"
-			echo " -s                   Run setup process if not already completed"
-			echo " -f                   Force setup to run again even if already completed (requires -s)"
-			echo " -a                   When creating udev rules, use alternative syntax (If the standard rule does work. try this)"
-			echo " -u                   Show all possible usb devices, not just specific 'known-good' subsets."
-			echo " -i                   When using -u, show 'incompatible' devices (no serial number) rather than hiding them."
-			echo " -k <keyfilename>     Specify an alternative key file to use"
-			echo " -l <logfilename>     Specify a log file name"
-			exit 0
-			;;
-		v)
-			echo "USB (Un)lock v0.1"
-			exit 0
-			;;
-		s)
-			SETUPMODE=1
-			;;
-		f)
-			FORCESETUP=1
-			;;
-		a)
-			ALTUDEV=1
-			;;
-		u)
-			ALLDEVICES=1
-			;;
-		i)
-			HIDEINCOMPATIBLE=0
-			;;
-		k)
-			FILENAME="$OPTARG"
-			DIR=`dirname ${FILENAME}`
-			if [ ! -e "${HOME}/${DIR}" ]; then
-				echo "ERROR: Filename is relative to current home directory, not an absolute path." >&2
-				exit 1;
-			fi;
-			;;
-		l)
-			LOGFILE="$OPTARG"
-			;;
-		\?)
-			echo "Usage: `basename $0` [-hvs] [-f keyfilename]" >&2
-			exit 1
-			;;
-	esac
-done
-shift `expr $OPTIND - 1`
+	# Filename to store unlock key in.
+	FILENAME=".usbkeyid"
 
+	# Flags from below.
+	# Do Setup
+	SETUPMODE=0
+	# Force setup even if already done
+	FORCESETUP=0
+	# Alternative UDEV
+	ALTUDEV=0
+	# Show all devices
+	ALLDEVICES=0
+	# Hide incompatible devices when showing all devices.
+	HIDEINCOMPATIBLE=1
+
+	while getopts huvsafik:l: OPT; do
+		case "$OPT" in
+			h)
+				echo "USB (Un)lock v0.1"
+				echo "Usage: `basename $0` [-hvsfaui] [-k keyfilename] [-l logfilename]"
+				echo " -h                   This help notification"
+				echo " -v                   Show version information"
+				echo " -s                   Run setup process if not already completed"
+				echo " -f                   Force setup to run again even if already completed (requires -s)"
+				echo " -a                   When creating udev rules, use alternative syntax (If the standard rule does work. try this)"
+				echo " -u                   Show all possible usb devices, not just specific 'known-good' subsets."
+				echo " -i                   When using -u, show 'incompatible' devices (no serial number) rather than hiding them."
+				echo " -k <keyfilename>     Specify an alternative key file to use"
+				echo " -l <logfilename>     Specify a log file name"
+				exit 0
+				;;
+			v)
+				echo "USB (Un)lock v0.1"
+				exit 0
+				;;
+			s)
+				SETUPMODE=1
+				;;
+			f)
+				FORCESETUP=1
+				;;
+			a)
+				ALTUDEV=1
+				;;
+			u)
+				ALLDEVICES=1
+				;;
+			i)
+				HIDEINCOMPATIBLE=0
+				;;
+			k)
+				FILENAME="$OPTARG"
+				DIR=`dirname ${FILENAME}`
+				if [ ! -e "${HOME}/${DIR}" ]; then
+					echo "ERROR: Filename is relative to current home directory, not an absolute path." >&2
+					exit 1;
+				fi;
+				;;
+			l)
+				SCREENLOCKER_LOGFILE="$OPTARG"
+				;;
+			\?)
+				echo "Usage: `basename $0` [-hvs] [-f keyfilename]" >&2
+				exit 1
+				;;
+		esac
+	done
+	shift `expr $OPTIND - 1`
+elif [ "${SCREENLOCKER_ISBASH}" != "1" ]; then
+	# Sourced, not bash.
+	echo "This script requires bash."
+	return;
+fi;
+
+# Find Devices
+#
+# First param passed will be set to contain the array of valid devices.
 findDevices() {
 	DEVICES=()
 	while read ID; do
@@ -94,6 +126,10 @@ findDevices() {
 	eval $1=\"${DEVICES[*]}\"
 }
 
+# Get device location.
+#
+# First param passed will be set to contain the device location
+# Second param passed is the actual device to look for.
 getDeviceLocation() {
 	DEVICE=${2}
 	VENDOR=`echo ${DEVICE} | awk -F: '{print $1}'`
@@ -111,6 +147,11 @@ getDeviceLocation() {
 }
 
 
+# Show device chooser.
+#
+# First param will be set to the chosen device vendor
+# second param will be set to the chosen device product
+# third param will be set to the chosen device serial
 choseDevice() {
 	findDevices DEVICES
 
@@ -194,6 +235,13 @@ choseDevice() {
 	eval ${3}=\"${SERIAL}\"
 }
 
+# Set up a given device.
+#
+# First param will be set to the chosen device vendor
+# second param will be set to the chosen device product
+# third param will be set to the chosen device serial
+# fourth param is the device to use based on BUS id (if fifth param is "")
+# fifth param is the device to use (eg /dev/<FOO>) - if blank, BUS is used.
 setupDevice() {
 	BUS="${4}"
 	DEV="${5}"
@@ -212,6 +260,15 @@ setupDevice() {
 	eval ${3}=\"${SERIAL}\"
 }
 
+# Get the key for a given device.
+#
+# First param will be set to the key
+# second param will be set to the chosen device vendor
+# third param will be set to the chosen device product
+# fourth param will be set to the chosen device serial
+# fifth param is the device to use based on BUS id
+# sixth param is the device to use (eg /dev/<FOO>)
+# seventh param is the method to use to calculate the key.
 getDeviceKey() {
 	BUS="${5}"
 	DEV="${6}"
@@ -229,6 +286,17 @@ getDeviceKey() {
 	eval ${4}=\"${SERIAL}\";
 }
 
+
+# Get the key for a given device.
+#
+# First param will be set to the key
+# second param is the device serial
+# third param is the device name
+# fourth param is the device vendor
+# fifth param is the device product
+# sixth param is the device BUS id
+# seventh param is the device to use (eg /dev/<FOO>)
+# eigth param is the method to use to generate the key ("1" is the only valid method)
 makeKey() {
 	SERIAL="${2}"
 	NAME="${3}"
@@ -256,6 +324,10 @@ makeKey() {
 	eval ${1}=\"${KEY}\";
 }
 
+# Load a key from the given file.
+#
+# First param will be set to the key from the file
+# second param is the file to read
 loadKey() {
 	KEYFILE="${2}"
 	if [ "${KEYFILE}" = "" ]; then
@@ -265,6 +337,10 @@ loadKey() {
 	eval ${1}=\"${KEY}\";
 }
 
+# Get a list of sessions for a user
+#
+# First param will be set to the array of sessions
+# second param is the user to list sessions for
 getSessions() {
 	USER="${2}"
 	ID=`id -u ${USER}`
@@ -279,136 +355,153 @@ getSessions() {
 	eval $1=\"${SESSIONS}\"
 }
 
+# Unlock the session of a given user.
+#
+# first param is the user who's sessions we want to unlock.
 unlockSession() {
 	USER="${1}"
 
 
-	echo "---------------" >> ${LOGFILE} 2>&1
-	echo "DATE: `date`" >> ${LOGFILE} 2>&1
-	echo "Unlocking.." >> ${LOGFILE} 2>&1
+	echo "---------------" >> ${SCREENLOCKER_LOGFILE} 2>&1
+	echo "DATE: `date`" >> ${SCREENLOCKER_LOGFILE} 2>&1
+	echo "Unlocking.." >> ${SCREENLOCKER_LOGFILE} 2>&1
 
 	getSessions SESSIONS ${USER}
 	for S in ${SESSIONS}; do
 		export DISPLAY="${S}"
-		echo "Display ${DISPLAY}.. " >> ${LOGFILE} 2>&1
+		echo "Display ${DISPLAY}.. " >> ${SCREENLOCKER_LOGFILE} 2>&1
 
 		QDBUS=`which qdbus`
 		DBUSSEND=`which dbus-send`
 		if [ "" != "${QDBUS}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver SetActive false" >> ${LOGFILE} 2>&1
+			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver SetActive false" >> ${SCREENLOCKER_LOGFILE} 2>&1
 		elif [ "" != "${DBUSSEND}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.SetActive boolean:false" >> ${LOGFILE} 2>&1
+			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.SetActive boolean:false" >> ${SCREENLOCKER_LOGFILE} 2>&1
 		fi;
 
 		# KDE 4.10 Broke this... https://bugs.kde.org/show_bug.cgi?id=314989
 		if [ "" != "${QDBUS}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} | grep kscreenlocker | sed 's/org.kde.//' | xargs kquitapp" >> ${LOGFILE} 2>&1
+			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} | grep kscreenlocker | sed 's/org.kde.//' | xargs kquitapp" >> ${SCREENLOCKER_LOGFILE} 2>&1
 		elif [ "" != "${DBUSSEND}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --print-reply --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep kscreenlocker | awk -F\\\" '{print \$2}' | sed 's/org.kde.//' | xargs kquitapp" >> ${LOGFILE} 2>&1
+			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --print-reply --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep kscreenlocker | awk -F\\\" '{print \$2}' | sed 's/org.kde.//' | xargs kquitapp" >> ${SCREENLOCKER_LOGFILE} 2>&1
 		fi;
 
-		echo "Unlocked" >> ${LOGFILE} 2>&1l
+		echo "Unlocked" >> ${SCREENLOCKER_LOGFILE} 2>&1l
 	done;
-	echo "Done" >> ${LOGFILE} 2>&1
+	echo "Done" >> ${SCREENLOCKER_LOGFILE} 2>&1
 }
 
+
+# Lock the session of a given user.
+#
+# first param is the user who's sessions we want to lock.
 lockSession() {
 	USER="${1}"
 
 	getSessions SESSIONS ${USER}
 
-	echo "---------------" >> ${LOGFILE} 2>&1
-	echo "DATE: `date`" >> ${LOGFILE} 2>&1
-	echo "Locking.." >> ${LOGFILE} 2>&1
+	echo "---------------" >> ${SCREENLOCKER_LOGFILE} 2>&1
+	echo "DATE: `date`" >> ${SCREENLOCKER_LOGFILE} 2>&1
+	echo "Locking.." >> ${SCREENLOCKER_LOGFILE} 2>&1
 	for S in ${SESSIONS}; do
 		export DISPLAY="${S}"
-		echo "Display ${DISPLAY}.. " >> ${LOGFILE} 2>&1
+		echo "Display ${DISPLAY}.. " >> ${SCREENLOCKER_LOGFILE} 2>&1
 
 		# This should lock everything...
 		QDBUS=`which qdbus`
 		DBUSSEND=`which dbus-send`
 		if [ "" != "${QDBUS}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${LOGFILE} 2>&1
+			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${SCREENLOCKER_LOGFILE} 2>&1
 		elif [ "" != "${DBUSSEND}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.Lock" >> ${LOGFILE} 2>&1
+			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.Lock" >> ${SCREENLOCKER_LOGFILE} 2>&1
 		fi;
 
-		echo "Locked" >> ${LOGFILE} 2>&1
+		echo "Locked" >> ${SCREENLOCKER_LOGFILE} 2>&1
 	done;
-	echo "Done" >> ${LOGFILE} 2>&1
+	echo "Done" >> ${SCREENLOCKER_LOGFILE} 2>&1
 }
 
-if [ "${SETUPMODE}" = "1" ]; then
-	if [ "${FORCESETUP}" = "1" -o ! -e "${HOME}/${FILENAME}" ]; then
-		choseDevice VENDOR PRODUCT SERIAL
-		echo "Setup has completed."
 
-		echo ""
-		echo "To make this work, please run the following:"
-		echo ""
+# Check if we are actually being "sourced" or ran properly.
+# If "sourced" then we just wanted the functions above, otherwise we want
+# to actually do something!
+if [ "${BASH_SOURCE}" = "${0}" ]; then
+	if [ "${SETUPMODE}" = "1" ]; then
+		if [ "${FORCESETUP}" = "1" -o ! -e "${HOME}/${FILENAME}" ]; then
+			choseDevice VENDOR PRODUCT SERIAL
+			echo "Setup has completed."
 
-		DIR="$( cd -P "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+			echo ""
+			echo "To make this work, please run the following:"
+			echo ""
 
-		FLAGS=("")
-		if [ "${LOGFILE}" != "/dev/null" ]; then
-			FLAGS+=(-l ${LOGFILE})
-		fi;
-		if [ "${FILENAME}" != ".usbkeyid" ]; then
-			FLAGS+=(-k "${FILENAME}")
-		fi;
+			DIR="$( cd -P "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-		# udevinfo () { udevadm info -a -p `udevadm info -q path -n "$1"`; }
-		# udevinfo /dev/sdj1
-		if [ "${ALTUDEV}" == "1" ]; then
-			echo -n "echo 'SUBSYSTEMS==\"usb\", ENV{ID_VENDOR_ID}==\"${VENDOR}\" ENV{ID_MODEL_ID}==\"${PRODUCT}\", ENV{ID_SERIAL_SHORT}==\"${SERIAL}\""
+			FLAGS=("")
+			if [ "${SCREENLOCKER_LOGFILE}" != "/dev/null" ]; then
+				FLAGS+=(-l ${SCREENLOCKER_LOGFILE})
+			fi;
+			if [ "${FILENAME}" != ".usbkeyid" ]; then
+				FLAGS+=(-k "${FILENAME}")
+			fi;
+
+			# udevinfo () { udevadm info -a -p `udevadm info -q path -n "$1"`; }
+			# udevinfo /dev/sdj1
+			if [ "${ALTUDEV}" = "1" ]; then
+				echo -n "echo 'SUBSYSTEMS==\"usb\", ENV{ID_VENDOR_ID}==\"${VENDOR}\" ENV{ID_MODEL_ID}==\"${PRODUCT}\", ENV{ID_SERIAL_SHORT}==\"${SERIAL}\""
+			else
+				echo -n "echo 'SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"${VENDOR}\" ATTRS{idProduct}==\"${PRODUCT}\", ATTRS{serial}==\"${SERIAL}\""
+			fi;
+			echo -n ", RUN+=\"${DIR}/`basename ${0}`${FLAGS[@]}\"' | sudo tee -a /etc/udev/rules.d/80-usbdisk.rules";
+
+			echo -n "; sudo chmod a+x /etc/udev/rules.d/80-usbdisk.rules"
+			echo "; sudo restart udev"
 		else
-			echo -n "echo 'SUBSYSTEMS==\"usb\", ATTRS{idVendor}==\"${VENDOR}\" ATTRS{idProduct}==\"${PRODUCT}\", ATTRS{serial}==\"${SERIAL}\""
+			echo "Setup has already been completed."
 		fi;
-		echo -n ", RUN+=\"${DIR}/`basename ${0}`${FLAGS[@]}\"' | sudo tee -a /etc/udev/rules.d/80-usbdisk.rules";
+		exit 0;
+	elif [ "${ACTION}" != "" ]; then
+		# Called by udev.
 
-		echo -n "; sudo chmod a+x /etc/udev/rules.d/80-usbdisk.rules"
-		echo "; sudo restart udev"
+		if [ "${ACTION}" = "add" -a "${ID_VENDOR_ID}" != "" -a "${ID_MODEL_ID}" != "" -a "${DEVNAME}" != ""  ]; then
+			VENDOR="${ID_VENDOR_ID}"
+			PRODUCT="${ID_MODEL_ID}"
+			SERIAL="${ID_SERIAL_SHORT}"
+			NAME="${ID_MODEL}"
+
+			while read KEYFILE; do
+				loadKey KEYWANTED "${KEYFILE}"
+				USER=`stat -c %U "${KEYFILE}"`
+				METHOD=`echo ${KEYWANTED} | awk -F\| '{print $1}'`
+
+				makeKey KEY "${SERIAL}" "${NAME}" "${VENDOR}" "${PRODUCT}" "${METHOD}"
+
+				if [ "${KEY}" = "${KEYWANTED}" ]; then
+					unlockSession ${USER}
+				fi;
+			done < <(ls /home/*/${FILENAME});
+		elif [ "${ACTION}" = "remove" -a "${ID_VENDOR_ID}" != "" -a "${ID_MODEL_ID}" != "" -a "${DEVNAME}" != ""  ]; then
+			VENDOR="${ID_VENDOR_ID}"
+			PRODUCT="${ID_MODEL_ID}"
+			SERIAL="${ID_SERIAL_SHORT}"
+			NAME="${ID_MODEL}"
+
+			while read KEYFILE; do
+				loadKey KEYWANTED "${KEYFILE}"
+				USER=`stat -c %U "${KEYFILE}"`
+				METHOD=`echo ${KEYWANTED} | awk -F\| '{print $1}'`
+
+				makeKey KEY "${SERIAL}" "${NAME}" "${VENDOR}" "${PRODUCT}" "${METHOD}"
+
+				if [ "${KEY}" = "${KEYWANTED}" ]; then
+					GOTKEY="1"
+					lockSession ${USER}
+				fi;
+			done < <(ls /home/*/${FILENAME});
+		fi;
 	else
-		echo "Setup has already been completed."
+		echo "USB (Un)lock v0.1"
+		echo "Usage: `basename $0` [-hvsfaui] [-k keyfilename] [-l logfilename]"
+		echo "Please try `basename $0` -h for help."
 	fi;
-	exit 0;
-else
-	# Called by udev.
-
-	if [ "${ACTION}" = "add" -a "${ID_VENDOR_ID}" != "" -a "${ID_MODEL_ID}" != "" -a "${DEVNAME}" != ""  ]; then
-		VENDOR="${ID_VENDOR_ID}"
-		PRODUCT="${ID_MODEL_ID}"
-		SERIAL="${ID_SERIAL_SHORT}"
-		NAME="${ID_MODEL}"
-
-		while read KEYFILE; do
-			loadKey KEYWANTED "${KEYFILE}"
-			USER=`stat -c %U "${KEYFILE}"`
-			METHOD=`echo ${KEYWANTED} | awk -F\| '{print $1}'`
-
-			makeKey KEY "${SERIAL}" "${NAME}" "${VENDOR}" "${PRODUCT}" "${METHOD}"
-
-			if [ "${KEY}" = "${KEYWANTED}" ]; then
-				unlockSession ${USER}
-			fi;
-		done < <(ls /home/*/${FILENAME});
-	elif [ "${ACTION}" = "remove" -a "${ID_VENDOR_ID}" != "" -a "${ID_MODEL_ID}" != "" -a "${DEVNAME}" != ""  ]; then
-		VENDOR="${ID_VENDOR_ID}"
-		PRODUCT="${ID_MODEL_ID}"
-		SERIAL="${ID_SERIAL_SHORT}"
-		NAME="${ID_MODEL}"
-
-		while read KEYFILE; do
-			loadKey KEYWANTED "${KEYFILE}"
-			USER=`stat -c %U "${KEYFILE}"`
-			METHOD=`echo ${KEYWANTED} | awk -F\| '{print $1}'`
-
-			makeKey KEY "${SERIAL}" "${NAME}" "${VENDOR}" "${PRODUCT}" "${METHOD}"
-
-			if [ "${KEY}" = "${KEYWANTED}" ]; then
-				GOTKEY="1"
-				lockSession ${USER}
-			fi;
-		done < <(ls /home/*/${FILENAME});
-	fi;
-fi
+fi;
