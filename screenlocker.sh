@@ -345,15 +345,51 @@ getSessions() {
 	USER="${2}"
 	ID=`id -u ${USER}`
 
-	SESSIONS=$(ck-list-sessions | awk -F' = ' '
+	# Sessions.
+	SESSIONS=()
+
+	# Bash sucks.
+	containsElement () {
+		local e
+		for e in "${@:2}"; do [[ "$e" == "$1" ]] && return 0; done
+		return 1
+	}
+
+	# Ask console-kit
+	while read SESSION; do
+		containsElement "${SESSION}" "${SESSIONS[@]}"
+		if [ ${?} -eq 1 ]; then
+			SESSIONS+=(${SESSION})
+		fi;
+	done < <(ck-list-sessions | awk -F' = ' '
 		function f(){if(U!="'${ID}'"){gsub("'"'"'","",D);print D}}
 		$1=="\tunix-user"{U=$2}
 		$1=="\tx11-display"{D=$2}
 		END{f()} /^[^\t]/{f()}
-	')
+	' | grep -v ^$);
 
-	eval $1=\"${SESSIONS}\"
+	# Recent versions of KDE seem to have decided not to bother init-ing
+	# their session with consolekit...
+	while read SESSION; do
+		containsElement "${SESSION}" "${SESSIONS[@]}"
+		if [ ${?} -eq 1 ]; then
+			SESSIONS+=(${SESSION})
+		fi;
+	done < <(who -s | grep ${USER} | awk -F\( '{print $2}' | awk -F\) '{print $1}' | grep -v ^$);
+
+	eval $1=\"${SESSIONS[*]}\"
 }
+
+# Get the DBUS_SESSION_BUS_ADDRESS of a given display...
+#
+# First param will be set to the DBUS_SESSION_BUS_ADDRESS for the display
+# second param is the display id (eg :0) to look for.
+getDBUS() {
+	SESSION="${2}"
+	DBUS=$(who -u -p | grep "(${SESSION})" | awk '{print $6}' | while read P; do cat /proc/${P}/environ | tr '\0' '\n' | grep -a DBUS_SESSION_BUS_ADDRESS; done | cut -d "=" -f 2- | sort -u)
+	eval ${1}=\"${DBUS}\";
+}
+
 
 # Unlock the session of a given user.
 #
@@ -361,6 +397,9 @@ getSessions() {
 unlockSession() {
 	USER="${1}"
 
+	QDBUS=`which qdbus`
+	QDBUS=""
+	DBUSSEND=`which dbus-send`
 
 	echo "---------------" >> ${SCREENLOCKER_LOGFILE} 2>&1
 	echo "DATE: `date`" >> ${SCREENLOCKER_LOGFILE} 2>&1
@@ -370,23 +409,31 @@ unlockSession() {
 	for S in ${SESSIONS}; do
 		export DISPLAY="${S}"
 		echo "Display ${DISPLAY}.. " >> ${SCREENLOCKER_LOGFILE} 2>&1
+		getDBUS DBUSADDRESS ":0"
 
-		QDBUS=`which qdbus`
-		DBUSSEND=`which dbus-send`
-		if [ "" != "${QDBUS}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver SetActive false" >> ${SCREENLOCKER_LOGFILE} 2>&1
-		elif [ "" != "${DBUSSEND}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.SetActive boolean:false" >> ${SCREENLOCKER_LOGFILE} 2>&1
-		fi;
+		for DBUS in ${DBUSADDRESS}; do
+			echo "DBUS Session: ${DBUS}" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			if [ "" != "${QDBUS}" ]; then
+				su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} --address '${DBUS}' org.freedesktop.ScreenSaver /ScreenSaver SetActive false" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			elif [ "" != "${DBUSSEND}" ]; then
+				su -l "${USER}" --shell="/bin/bash" -c "DBUS_SESSION_BUS_ADDRESS='${DBUS}' ${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.SetActive boolean:false" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			fi;
 
-		# KDE 4.10 Broke this... https://bugs.kde.org/show_bug.cgi?id=314989
-		if [ "" != "${QDBUS}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} | grep kscreenlocker | sed 's/org.kde.//' | xargs kquitapp" >> ${SCREENLOCKER_LOGFILE} 2>&1
-		elif [ "" != "${DBUSSEND}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --print-reply --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep kscreenlocker | awk -F\\\" '{print \$2}' | sed 's/org.kde.//' | xargs kquitapp" >> ${SCREENLOCKER_LOGFILE} 2>&1
-		fi;
+			# KDE 4.10 Broke this... https://bugs.kde.org/show_bug.cgi?id=314989
+			# Try kquitapp first, then try using dbus to ask the process to
+			# quit.
+			if [ "" != "${QDBUS}" ]; then
+				su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} --address '${DBUS}' | grep kscreenlocker | sed 's/org.kde.//' | xargs kquitapp" >> ${SCREENLOCKER_LOGFILE} 2>&1
+				su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} --address '${DBUS}' | grep kscreenlocker | xargs -i ${QDBUS} --address '${DBUS}' {} /MainApplication quit" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			elif [ "" != "${DBUSSEND}" ]; then
+				su -l "${USER}" --shell="/bin/bash" -c "DBUS_SESSION_BUS_ADDRESS='${DBUS}' ${DBUSSEND} --print-reply --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep kscreenlocker | awk -F\\\" '{print \$2}' | sed 's/org.kde.//' | xargs kquitapp" >> ${SCREENLOCKER_LOGFILE} 2>&1
+				while read LOCKER; do
+					su -l "${USER}" --shell="/bin/bash" -c "DBUS_SESSION_BUS_ADDRESS='${DBUS}' ${DBUSSEND} --print-reply --type=method_call --dest=${LOCKER} /MainApplication org.kde.KApplication.quit" >> ${SCREENLOCKER_LOGFILE} 2>&1
+				done < <(su -l "${USER}" --shell="/bin/bash" -c "DBUS_SESSION_BUS_ADDRESS='${DBUS}' ${DBUSSEND} --print-reply --type=method_call --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListNames | grep kscreenlocker | awk -F\\\" '{print \$2}'");
+			fi;
+		done;
 
-		echo "Unlocked" >> ${SCREENLOCKER_LOGFILE} 2>&1l
+		echo "Unlocked" >> ${SCREENLOCKER_LOGFILE} 2>&1
 	done;
 	echo "Done" >> ${SCREENLOCKER_LOGFILE} 2>&1
 }
@@ -398,8 +445,11 @@ unlockSession() {
 lockSession() {
 	USER="${1}"
 
-	getSessions SESSIONS ${USER}
+	QDBUS=`which qdbus`
+	QDBUS=""
+	DBUSSEND=`which dbus-send`
 
+	getSessions SESSIONS ${USER}
 	echo "---------------" >> ${SCREENLOCKER_LOGFILE} 2>&1
 	echo "DATE: `date`" >> ${SCREENLOCKER_LOGFILE} 2>&1
 	echo "Locking.." >> ${SCREENLOCKER_LOGFILE} 2>&1
@@ -407,14 +457,17 @@ lockSession() {
 		export DISPLAY="${S}"
 		echo "Display ${DISPLAY}.. " >> ${SCREENLOCKER_LOGFILE} 2>&1
 
-		# This should lock everything...
-		QDBUS=`which qdbus`
-		DBUSSEND=`which dbus-send`
-		if [ "" != "${QDBUS}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${SCREENLOCKER_LOGFILE} 2>&1
-		elif [ "" != "${DBUSSEND}" ]; then
-			su -l "${USER}" --shell="/bin/bash" -c "${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.Lock" >> ${SCREENLOCKER_LOGFILE} 2>&1
-		fi;
+		getDBUS DBUSADDRESS ":0"
+
+		for DBUS in ${DBUSADDRESS}; do
+			echo "DBUS Session: ${DBUS}" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			# This should lock everything...
+			if [ "" != "${QDBUS}" ]; then
+				su -l "${USER}" --shell="/bin/bash" -c "${QDBUS} --address '${DBUS}' org.freedesktop.ScreenSaver /ScreenSaver Lock" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			elif [ "" != "${DBUSSEND}" ]; then
+				su -l "${USER}" --shell="/bin/bash" -c "DBUS_SESSION_BUS_ADDRESS='${DBUS}' ${DBUSSEND} --type=method_call --dest=org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver.Lock" >> ${SCREENLOCKER_LOGFILE} 2>&1
+			fi;
+		done;
 
 		echo "Locked" >> ${SCREENLOCKER_LOGFILE} 2>&1
 	done;
